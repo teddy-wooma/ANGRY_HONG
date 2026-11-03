@@ -8,7 +8,7 @@ const { pipeline } = require('stream/promises')
 const semver = require('semver')
 const yaml = require('js-yaml')
 
-const RELEASE_BASE = 'https://github.com/teddy-wooma/barkan-launcher/releases'
+const RELEASE_BASE = 'https://github.com/teddy-wooma/ANGRY_HONG/releases'
 
 // Use the published file names. electron-builder normalizes spaces to hyphens.
 function parseMacRelease(text, arch, releaseBase = RELEASE_BASE) {
