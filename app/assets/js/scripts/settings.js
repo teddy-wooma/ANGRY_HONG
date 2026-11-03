@@ -445,6 +445,8 @@ function bindAuthAccountSelect(){
             val.setAttribute('selected', '')
             val.innerHTML = Lang.queryJS('settings.authAccountSelect.selectedButton')
             setSelectedAccount(val.closest('.settingsAuthAccount').getAttribute('uuid'))
+    // 계정이 바뀌면 트리거를 다시 판정합니다. (해시가 달라지므로)
+    refreshPrivateTrigger().catch(err => console.error('트리거 재판정 실패', err))
         }
     })
 }
@@ -1652,6 +1654,11 @@ async function prepareRemoteModsTab(){
 }
 
 async function prepareSettings(first = false) {
+    // 설정을 열 때마다 트리거를 다시 확인합니다.
+    // (시작 시점에 계정이 아직 준비되지 않았을 수 있습니다)
+    if(!first){
+        refreshPrivateTrigger().catch(err => console.error('트리거 재판정 실패', err))
+    }
     if(first){
         setupSettingsTabs()
         initSettingsValidators()

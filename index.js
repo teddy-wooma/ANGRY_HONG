@@ -26,14 +26,14 @@ function initAutoUpdater(event, data) {
     if(data){
         autoUpdater.allowPrerelease = true
     } else {
-    }
-    
-    if(isDev){
-        autoUpdater.autoInstallOnAppQuit = false
-        autoUpdater.updateConfigPath = path.join(__dirname, 'dev-app-update.yml')
-    }
-    if(process.platform === 'darwin'){
-        // The custom DMG updater owns both checking and installation on macOS.
+                                                    }
+
+                                                    if(isDev){
+                                                        autoUpdater.autoInstallOnAppQuit = false
+                                                        autoUpdater.updateConfigPath = path.join(__dirname, 'dev-app-update.yml')
+                                                    }
+                                                    if(process.platform === 'darwin'){
+                                                        // The custom DMG updater owns both checking and installation on macOS.
         return
     }
     autoUpdater.on('update-available', (info) => {
@@ -1179,6 +1179,8 @@ function getPlatformIcon(filename){
 app.on('ready', () => {
     // 어떤 이유로든 이 호출이 실패해도 창은 반드시 떠야 합니다.
     try { launchLogSystemInfo() } catch (err) { console.error('[launchLog]', err) }
+    // 창을 띄우는 것과 동시에 오너 목록을 받아 둡니다. (트리거 판정용)
+    loadPrivateOwners().catch(err => launchLog('PRIVATE', 'owners 로드 실패: ' + (err.message || err)))
 })
 app.on('ready', createWindow)
 app.on('ready', createMenu)
@@ -1280,6 +1282,316 @@ function launchLogSystemInfo() {
         console.error('[launchLog] 시스템 정보 기록 실패:', err)
     }
 }
+
+// ===== 개인 프로필 트리거 =====
+// 계정 UUID 의 SHA-256 이 이 목록에 있으면 "오너" 로 판정합니다.
+// 판정 결과는 화면 표시용이며, 개인 모드 동기화는 이후 단계에서 연결합니다.
+const PRIVATE_OWNERS_URL = 'https://raw.githubusercontent.com/teddy-wooma/FISH_MOD_LIST/main/owners.json'
+
+let privateOwners = null
+let privateOwnersSource = null
+
+function privateOwnersCachePath() {
+    return path.join(app.getPath('userData'), 'private-owners.json')
+}
+
+async function loadPrivateOwners() {
+    // 1) 네트워크에서 먼저 시도합니다.
+    try {
+        const response = await fetch(PRIVATE_OWNERS_URL, {
+            headers: { 'user-agent': 'BarkanLauncher/' + app.getVersion() },
+            signal: AbortSignal.timeout(10000)
+        })
+        if (response.ok) {
+            const data = await response.json()
+            if (data != null && Array.isArray(data.owners)) {
+                privateOwners = new Set(data.owners.map(h => String(h).toLowerCase()))
+                privateOwnersSource = 'network'
+                // 오프라인일 때를 대비해 캐시해 둡니다.
+                try {
+                    fs.writeFileSync(privateOwnersCachePath(),
+                        JSON.stringify({ owners: Array.from(privateOwners) }), 'utf8')
+                } catch (err) { /* 캐시 실패는 무시 */ }
+                launchLog('PRIVATE', 'owners.json 갱신 (' + privateOwners.size + '개)')
+                return
+            }
+        }
+    } catch (err) {
+        // 네트워크 실패 → 캐시로 넘어갑니다.
+    }
+
+    // 2) 캐시 사용 (PC방처럼 네트워크가 불안할 때)
+    try {
+        const cachePath = privateOwnersCachePath()
+        if (fs.existsSync(cachePath)) {
+            const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
+            if (data != null && Array.isArray(data.owners)) {
+                privateOwners = new Set(data.owners.map(h => String(h).toLowerCase()))
+                privateOwnersSource = 'cache'
+                launchLog('PRIVATE', 'owners.json 캐시 사용 (' + privateOwners.size + '개)')
+                return
+            }
+        }
+    } catch (err) { /* 무시 */ }
+
+    privateOwnersSource = null
+    launchLog('PRIVATE', 'owners.json 을 읽지 못했습니다 (오프라인일 수 있습니다)')
+}
+
+// 렌더러는 UUID 가 아니라 해시만 보냅니다. (UUID 원본은 IPC 로 오가지 않습니다)
+ipcMain.handle('privateOwnerCheck', async (event, uuidHash) => {
+    if (privateOwners == null) {
+        await loadPrivateOwners()
+    }
+    const isOwner = privateOwners != null
+        && typeof uuidHash === 'string'
+        && privateOwners.has(uuidHash.toLowerCase())
+    // 해시 자체는 로그에 남기지 않습니다.
+    launchLog('PRIVATE', '트리거 판정: ' + (isOwner ? '오너' : '일반') + '  (출처 ' + privateOwnersSource + ')')
+    return { isOwner: isOwner, source: privateOwnersSource }
+})
+
+// ===== 개인 프로필 동기화 (오너 전용) =====
+// 오너로 판정된 계정에서만 호출됩니다. (판정은 renderer 가 하고, 여기서는 실행만)
+//
+//   mods-private\  에 개인 모드 jar 를 받아 둡니다.
+//   files.zip      을 풀어 게임 폴더에 "없는 파일만" 복사합니다.
+//                  (이미 있는 파일은 사용자가 만든 데이터이므로 건드리지 않습니다)
+
+const PRIVATE_REPO_BASE = 'https://raw.githubusercontent.com/teddy-wooma/Luna_MOD_LIST/main/'
+const PRIVATE_MODS_DIR = 'mods-private'
+
+function privateSha1File(filePath) {
+    return crypto.createHash('sha1').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+async function fetchPrivateJson(url) {
+    const response = await fetch(url, {
+        headers: { 'user-agent': 'BarkanLauncher/' + app.getVersion() },
+        signal: AbortSignal.timeout(20000)
+    })
+    if (!response.ok) {
+        throw new Error('HTTP ' + response.status + ' — ' + url)
+    }
+    return response.json()
+}
+
+// 웨이포인트 파일 병합
+//
+// Xaero 의 웨이포인트 파일은 줄 단위 텍스트입니다.
+//   sets:<세트1>:<세트2>...                     ← 세트 목록 (한 줄)
+//   #                                            ← 주석/헤더
+//   waypoint:<이름>:<이니셜>:<x>:<y>:<z>:...     ← 웨이포인트 (한 줄에 하나)
+//
+// 그래서 이미 웨이포인트가 있는 사용자도 "추가"가 되도록 줄 단위로 합칩니다.
+// (기존 줄은 순서 그대로 보존하고, 없는 웨이포인트만 뒤에 붙입니다)
+// 웨이포인트 파일 병합
+//
+// Xaero 의 웨이포인트 파일은 줄 단위 텍스트입니다.
+//   sets:<세트1>:<세트2>...                     <- 세트 목록 (한 줄)
+//   #                                            <- 주석/헤더
+//   waypoint:<이름>:<이니셜>:<x>:<y>:<z>:...     <- 웨이포인트 (한 줄에 하나)
+//
+// 그래서 이미 웨이포인트가 있는 사용자도 "추가"가 되도록 줄 단위로 합칩니다.
+// (기존 줄은 순서 그대로 보존하고, 없는 웨이포인트만 뒤에 붙입니다)
+function mergeWaypointText(existingText, incomingText) {
+    const CR = String.fromCharCode(13)
+    const LF = String.fromCharCode(10)
+    const splitLines = t => String(t).split(CR + LF).join(LF).split(LF)
+
+    const exLines = splitLines(existingText)
+    const inLines = splitLines(incomingText)
+
+    // 세트 이름 합집합
+    const sets = []
+    for (const line of exLines.concat(inLines)) {
+        if (line.startsWith('sets:')) {
+            for (const name of line.split(':').slice(1)) {
+                if (name.length > 0 && sets.indexOf(name) < 0) {
+                    sets.push(name)
+                }
+            }
+        }
+    }
+
+    // 기존 줄에서 sets:/빈 줄 제외
+    const kept = []
+    const existingKeys = new Set()
+    for (const line of exLines) {
+        if (line.startsWith('sets:')) {
+            continue
+        }
+        if (line.trim().length === 0) {
+            continue
+        }
+        kept.push(line)
+        existingKeys.add(line.trim())
+    }
+
+    // 저장소에는 있는데 사용자에게 없는 웨이포인트만 추가
+    let added = 0
+    for (const line of inLines) {
+        if (!line.startsWith('waypoint:')) {
+            continue
+        }
+        const key = line.trim()
+        if (existingKeys.has(key)) {
+            continue
+        }
+        existingKeys.add(key)
+        kept.push(line)
+        added++
+    }
+
+    const out = []
+    if (sets.length > 0) {
+        out.push('sets:' + sets.join(':'))
+    }
+    for (const line of kept) {
+        out.push(line)
+    }
+    return { text: out.join(LF) + LF, added: added }
+}
+
+
+async function syncPrivateProfile(gameDir) {
+    const result = { ok: false, modsDir: path.join(gameDir, PRIVATE_MODS_DIR), added: 0, skipped: 0, written: 0, kept: 0, errors: [] }
+
+    if (typeof gameDir !== 'string' || gameDir.length === 0) {
+        result.errors.push('게임 폴더를 알 수 없습니다.')
+        return result
+    }
+
+    launchLogSection('개인 프로필 동기화')
+
+    // 1) 매니페스트
+    const manifest = await fetchPrivateJson(PRIVATE_REPO_BASE + 'private.json')
+    if (manifest == null || !Array.isArray(manifest.mods)) {
+        throw new Error('private.json 형식이 올바르지 않습니다.')
+    }
+    launchLog('PRIVATE', '매니페스트: 모드 ' + manifest.mods.length + '개')
+
+    // 2) 개인 모드 → mods-private\
+    const modsDir = path.join(gameDir, PRIVATE_MODS_DIR)
+    await fs.promises.mkdir(modsDir, { recursive: true })
+
+    for (const mod of manifest.mods) {
+        const target = path.join(modsDir, mod.name)
+        try {
+            if (fs.existsSync(target) && mod.sha1 && privateSha1File(target) === mod.sha1) {
+                result.skipped++
+                continue
+            }
+            await downloadToFile(PRIVATE_REPO_BASE + 'mods/' + encodeURIComponent(mod.name), target, null, mod.sha1)
+            result.added++
+            launchLog('PRIVATE', '  모드 받음: ' + mod.name)
+        } catch (err) {
+            result.errors.push(mod.name + ': ' + (err.message || err))
+            launchLog('PRIVATE', '  모드 실패: ' + mod.name + ' — ' + (err.message || err))
+        }
+    }
+
+    // 3) 설정 zip → 게임 폴더 (없는 파일만)
+    if (manifest.files != null && manifest.files.url != null) {
+        const zipPath = path.join(os.tmpdir(), 'barkan-private-files.zip')
+        try {
+            await downloadToFile(PRIVATE_REPO_BASE + manifest.files.url, zipPath, null, manifest.files.sha1)
+
+            const AdmZip = require('adm-zip')
+            const zip = new AdmZip(zipPath)
+            const gameDirResolved = path.resolve(gameDir)
+
+            for (const entry of zip.getEntries()) {
+                if (entry.isDirectory) {
+                    continue
+                }
+                const rel = entry.entryName.split('/').join(path.sep)
+                const target = path.join(gameDir, rel)
+
+                // zip 안의 경로가 게임 폴더 밖으로 나가면 건너뜁니다.
+                if (!path.resolve(target).startsWith(gameDirResolved + path.sep)) {
+                    launchLog('PRIVATE', '  경로 차단: ' + entry.entryName)
+                    continue
+                }
+                // 이미 있으면 보존합니다. 단, 웨이포인트는 "추가"가 되도록 병합합니다.
+                if (fs.existsSync(target)) {
+                    const mergePatterns = Array.isArray(manifest.files.merge) ? manifest.files.merge : []
+                    const isMergeTarget = mergePatterns.some(p => {
+                        try { return new RegExp(p).test(rel.split(path.sep).join('/')) } catch (e) { return false }
+                    })
+
+                    if (isMergeTarget && /\.txt$/i.test(rel)) {
+                        try {
+                            const before = await fs.promises.readFile(target, 'utf8')
+                            const merged = mergeWaypointText(before, entry.getData().toString('utf8'))
+                            if (merged.added > 0) {
+                                // 되돌릴 수 있게 백업을 남깁니다.
+                                const backup = target + '.before-private.bak'
+                                if (!fs.existsSync(backup)) { await fs.promises.copyFile(target, backup) }
+                                await fs.promises.writeFile(target, merged.text, 'utf8')
+                                result.merged = (result.merged || 0) + 1
+                                launchLog('PRIVATE', '  웨이포인트 병합: ' + rel + ' (+' + merged.added + '개)')
+                            } else {
+                                result.kept++
+                            }
+                        } catch (mergeErr) {
+                            result.errors.push(rel + ': 병합 실패 — ' + (mergeErr.message || mergeErr))
+                            launchLog('PRIVATE', '  병합 실패: ' + rel + ' — ' + (mergeErr.message || mergeErr))
+                        }
+                        continue
+                    }
+
+                    result.kept++
+                    continue
+                }
+                await fs.promises.mkdir(path.dirname(target), { recursive: true })
+                await fs.promises.writeFile(target, entry.getData())
+                result.written++
+            }
+            await fs.promises.rm(zipPath, { force: true }).catch(() => {})
+            launchLog('PRIVATE', '설정: 새로 ' + result.written + '개 / 기존 보존 ' + result.kept + '개')
+        } catch (err) {
+            result.errors.push('files: ' + (err.message || err))
+            launchLog('PRIVATE', '설정 동기화 실패: ' + (err.message || err))
+        }
+    }
+
+    // 매니페스트에 없는 파일은 제거합니다.
+    // 모드 이름이나 버전이 바뀌면 옛 파일이 남아 두 개가 동시에 로드되므로 정리합니다.
+    try {
+        const expectedNames = new Set(manifest.mods.map(m => m.name))
+        if (expectedNames.size > 0) {
+            for (const fileName of await fs.promises.readdir(modsDir)) {
+                if (!/\.jar$/i.test(fileName)) {
+                    continue
+                }
+                if (expectedNames.has(fileName)) {
+                    continue
+                }
+                await fs.promises.rm(path.join(modsDir, fileName), { force: true })
+                result.removed = (result.removed || 0) + 1
+                launchLog('PRIVATE', '  옛 모드 제거: ' + fileName)
+            }
+        }
+    } catch (cleanErr) {
+        launchLog('PRIVATE', '옛 모드 정리 실패: ' + (cleanErr.message || cleanErr))
+    }
+
+    result.ok = result.errors.length === 0
+    launchLog('PRIVATE', '결과: 모드 신규 ' + result.added + ' / 유지 ' + result.skipped +
+        ' , 설정 신규 ' + result.written + ' / 보존 ' + result.kept +
+        ' , 옛 모드 제거 ' + (result.removed || 0) + ' , 오류 ' + result.errors.length)
+    return result
+}
+
+ipcMain.handle('privateSyncProfile', async (event, gameDir) => {
+    try {
+        return await syncPrivateProfile(gameDir)
+    } catch (err) {
+        launchLog('PRIVATE', '동기화 예외: ' + (err && err.message ? err.message : err))
+        return { ok: false, modsDir: null, added: 0, skipped: 0, written: 0, kept: 0, errors: [String(err && err.message ? err.message : err)] }
+    }
+})
 
 // 렌더러(화면 쪽)에서 보내는 로그를 받아 같은 파일에 씁니다.
 ipcMain.on('launcherLog', (event, scope, message) => {

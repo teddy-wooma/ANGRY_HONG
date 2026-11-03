@@ -668,6 +668,27 @@ async function dlAsync(login = true) {
             }
 
 
+            // 개인 프로필 (오너 전용): 개인 모드와 설정을 받아 둡니다.
+            // 일반 계정은 __privateOwner 가 false 라 아무 일도 하지 않습니다.
+            window.__privateProfileActive = false
+            if (window.__privateOwner === true) {
+                try {
+                    setLaunchDetails('개인 프로필 적용 중..')
+                    logLaunch('PRIVATE', '개인 프로필 동기화 시작')
+                    const privateResult = await require('electron').ipcRenderer.invoke('privateSyncProfile', pb.gameDir)
+                    if (privateResult != null && privateResult.ok) {
+                        window.__privateProfileActive = true
+                        logLaunch('PRIVATE', '동기화 성공 — 모드 ' + privateResult.added + '개 추가 / ' + privateResult.skipped + '개 유지, 설정 ' + privateResult.written + '개 추가 / ' + privateResult.kept + '개 보존')
+                    } else {
+                        logLaunch('PRIVATE', '동기화 실패 — 일반 모드로 실행합니다: ' + (privateResult != null && privateResult.errors ? privateResult.errors.join(' | ') : '알 수 없음'))
+                    }
+                } catch (privErr) {
+                    logLaunch('PRIVATE', '동기화 예외 — 일반 모드로 실행합니다: ' + (privErr && privErr.message ? privErr.message : privErr))
+                }
+            } else {
+                logLaunch('PRIVATE', '오너가 아니므로 개인 프로필을 건너뜁니다')
+            }
+
             logLaunch('LAUNCH', 'ProcessBuilder.build() 호출 — 게임 프로세스를 띄웁니다')
             proc = pb.build()
 

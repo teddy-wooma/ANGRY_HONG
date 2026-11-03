@@ -7,6 +7,87 @@ const isDev                          = require('./assets/js/isdev')
 const { LoggerUtil }                 = require('helios-core')
 const Lang                           = require('./assets/js/langloader')
 
+// ===== 개인 프로필 트리거 (화면 쪽) =====
+// 로그인된 계정 UUID 의 SHA-256 을 구해 메인 프로세스에 물어봅니다.
+// 판정 결과가 오너면 정보 탭에 표시를 켭니다.
+let privateOwnerState = { checked: false, isOwner: false, source: null }
+
+function uuidToHash(uuid) {
+    try {
+        const crypto = require('crypto')
+        return crypto.createHash('sha256')
+            .update(String(uuid).replace(/-/g, '').toLowerCase(), 'utf8')
+            .digest('hex')
+    } catch (err) {
+        return null
+    }
+}
+
+function applyPrivateTriggerUI() {
+    try {
+        const badge = document.getElementById('privateTriggerBadge')
+        if (badge == null) {
+            return
+        }
+        badge.style.display = privateOwnerState.isOwner ? 'inline-block' : 'none'
+        // 다른 스크립트(landing.js)가 개인 프로필 동기화 여부를 판단할 때 씁니다.
+        window.__privateOwner = privateOwnerState.isOwner === true
+    } catch (err) {
+        // 표시 실패가 런처 동작을 막지 않게 합니다.
+    }
+}
+
+// 트리거 판정 과정을 런처 로그에 남깁니다. (어디서 멈추는지 확인용)
+function triggerLog(message) {
+    try {
+        ipcRenderer.send('launcherLog', 'TRIGGER', message)
+    } catch (err) {
+        // 로그를 못 남겨도 판정은 계속합니다.
+    }
+}
+
+async function refreshPrivateTrigger() {
+    triggerLog('판정 시작 (isDev=' + isDev + ')')
+    try {
+        const ConfigManager = require('./assets/js/configmanager')
+        const account = ConfigManager.getSelectedAccount()
+
+        if (account == null) {
+            triggerLog('로그인된 계정이 없습니다 → 일반 처리')
+            privateOwnerState = { checked: true, isOwner: false, source: null }
+            applyPrivateTriggerUI()
+            return
+        }
+        triggerLog('계정 확인: uuid=' + (account.uuid != null ? '있음' : '없음') + ', type=' + account.type)
+
+        const hash = account.uuid != null ? uuidToHash(account.uuid) : null
+        if (hash == null) {
+            triggerLog('해시를 만들지 못했습니다 → 일반 처리')
+            privateOwnerState = { checked: true, isOwner: false, source: null }
+            applyPrivateTriggerUI()
+            return
+        }
+        triggerLog('해시 앞 8자: ' + hash.slice(0, 8) + '... → 메인에 조회 요청')
+
+        const result = await ipcRenderer.invoke('privateOwnerCheck', hash)
+        triggerLog('메인 응답: isOwner=' + (result != null ? result.isOwner : 'null') + ', source=' + (result != null ? result.source : '-'))
+
+        privateOwnerState = {
+            checked: true,
+            isOwner: result != null && result.isOwner === true,
+            source: result != null ? result.source : null
+        }
+    } catch (err) {
+        triggerLog('판정 중 예외: ' + (err && err.message ? err.message : String(err)))
+        privateOwnerState = { checked: true, isOwner: false, source: null }
+    }
+    applyPrivateTriggerUI()
+    try {
+        const badge = document.getElementById('privateTriggerBadge')
+        triggerLog('배지 요소: ' + (badge == null ? 'X 없음 (settings.ejs 확인 필요)' : 'O 있음') + ' / 표시=' + privateOwnerState.isOwner)
+    } catch (err) { /* 무시 */ }
+}
+
 const loggerUICore             = LoggerUtil.getLogger('UICore')
 const loggerAutoUpdater        = LoggerUtil.getLogger('AutoUpdater')
 

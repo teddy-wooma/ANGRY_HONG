@@ -4377,3 +4377,21 @@ body {
 .shaderQualityButton.selected {
     box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.35);
 }
+
+
+/* ===== 개인 프로필 트리거 표시 ===== */
+/* 오너 계정일 때만 보입니다. 눈에 잘 띄지 않게 작고 흐리게 둡니다. */
+#privateTriggerBadge {
+    display: none;
+    margin-top: 16px;
+    font-size: 10px;
+    opacity: 0.55;
+    color: #5fd67a;
+    letter-spacing: 0.3px;
+    user-select: none;
+    transition: opacity 120ms ease;
+}
+
+#privateTriggerBadge:hover {
+    opacity: 0.95;
+}

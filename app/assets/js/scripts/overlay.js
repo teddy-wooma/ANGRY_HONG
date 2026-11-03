@@ -149,6 +149,7 @@ document.getElementById('accountSelectConfirm').addEventListener('click', async 
     for(let i=0; i<listings.length; i++){
         if(listings[i].hasAttribute('selected')){
             const authAcc = ConfigManager.setSelectedAccount(listings[i].getAttribute('uuid'))
+            refreshPrivateTrigger().catch(err => console.error('트리거 재판정 실패', err))
             ConfigManager.save()
             updateSelectedAccount(authAcc)
             if(getCurrentView() === VIEWS.settings) {
@@ -162,6 +163,7 @@ document.getElementById('accountSelectConfirm').addEventListener('click', async 
 
     if(listings.length > 0){
         const authAcc = ConfigManager.setSelectedAccount(listings[0].getAttribute('uuid'))
+            refreshPrivateTrigger().catch(err => console.error('트리거 재판정 실패', err))
         ConfigManager.save()
         updateSelectedAccount(authAcc)
         if(getCurrentView() === VIEWS.settings) {

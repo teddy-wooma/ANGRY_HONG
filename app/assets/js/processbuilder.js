@@ -226,6 +226,29 @@ class ProcessBuilder {
         // ---- 진단 로그: 실행 직전 상태를 전부 남깁니다 ----
         const javaExecPath = ConfigManager.getJavaExecutable(this.server.rawServer.id)
         const javaExists = javaExecPath != null && javaExecPath.length > 0 && fs.existsSync(javaExecPath)
+        // 개인 프로필이 켜져 있으면 개인 모드 폴더를 JVM 에 알려 줍니다.
+        // Fabric 은 -Dfabric.addMods 로 추가 모드 경로를 읽습니다. (mods\ 에 복사하지 않아도 됨)
+        try {
+            if (typeof window !== 'undefined' && window.__privateProfileActive === true) {
+                const privateModsDir = path.join(this.gameDir, 'mods-private')
+                if (fs.existsSync(privateModsDir)) {
+                    const addArg = '-Dfabric.addMods=' + privateModsDir
+                    const mainIdx = args.findIndex(a => typeof a === 'string'
+                        && (a === 'net.fabricmc.loader.impl.launch.knot.KnotClient' || a === 'net.minecraft.client.main.Main'))
+                    if (mainIdx > 0) {
+                        args.splice(mainIdx, 0, addArg)   // 메인 클래스 앞에 넣어야 JVM 이 인식합니다
+                    } else {
+                        args.unshift(addArg)
+                    }
+                    pbLog('EXEC', '개인 모드 폴더 추가: ' + privateModsDir)
+                } else {
+                    pbLog('EXEC', '개인 모드 폴더가 없습니다: ' + privateModsDir)
+                }
+            }
+        } catch (err) {
+            pbLog('EXEC', '개인 모드 경로 추가 실패: ' + (err && err.message ? err.message : err))
+        }
+
         pbLogSection('게임 실행 준비')
         pbLog('EXEC', 'Java 실행 파일 : ' + javaExecPath)
         pbLog('EXEC', 'Java 존재 여부 : ' + (javaExists ? 'O 있음' : 'X 없음  ← 이게 실행 실패의 원인입니다'))

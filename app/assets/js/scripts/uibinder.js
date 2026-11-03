@@ -46,6 +46,10 @@ async function showMainUI(data){
         ipcRenderer.send('autoUpdateAction', 'initAutoUpdater', ConfigManager.getAllowPrerelease())
     }
 
+    // 개인 프로필 트리거: 로그인된 계정이 오너인지 확인합니다.
+    // 개발 모드에서도 동작해야 하므로 if(!isDev) 밖에 둡니다.
+    refreshPrivateTrigger().catch(err => console.error('트리거 판정 실패', err))
+
     await prepareSettings(true)
     updateSelectedServer(data.getServerById(ConfigManager.getSelectedServer()))
     refreshServerStatus()
