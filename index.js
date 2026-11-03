@@ -1584,6 +1584,135 @@ async function syncPrivateProfile(gameDir) {
     return result
 }
 
+// -----------------------------------------------------------------------------
+// 커스텀 번들 (모드 · 세부 설정 · 맵 캐시)
+//
+// 배포 저장소 릴리즈에 올려 둔 custom-bundle.zip 을 내려받아 게임 폴더에
+// "없는 파일만" 풀어 넣습니다.
+//   - 이미 있는 파일은 덮어쓰지 않습니다. (사용자 설정 보존)
+//   - 웨이포인트(.txt)는 기존 항목에 병합합니다.
+//   - 한 번 받은 번들은 크기(marker)로 판별해 다시 받지 않습니다.
+// -----------------------------------------------------------------------------
+const CUSTOM_BUNDLE_URL = 'https://github.com/teddy-wooma/ANGRY_HONG/releases/latest/download/custom-bundle.zip'
+const CUSTOM_BUNDLE_MARKER = '.barkan-bundle.json'
+const CUSTOM_BUNDLE_MERGE = [
+    '^xaero/minimap/.+\\.txt$'
+]
+
+async function syncCustomBundle(gameDir) {
+    const result = { ok: false, skipped: false, written: 0, kept: 0, merged: 0, errors: [] }
+
+    if (typeof gameDir !== 'string' || gameDir.length === 0) {
+        result.errors.push('게임 폴더를 알 수 없습니다.')
+        return result
+    }
+
+    launchLogSection('커스텀 번들 동기화')
+
+    const markerPath = path.join(gameDir, CUSTOM_BUNDLE_MARKER)
+    let remoteSize = 0
+
+    try {
+        const head = await fetch(CUSTOM_BUNDLE_URL, {
+            method: 'HEAD',
+            redirect: 'follow',
+            headers: { 'user-agent': 'BarkanLauncher/' + app.getVersion() },
+            signal: AbortSignal.timeout(20000)
+        })
+        if (head.ok) {
+            remoteSize = Number(head.headers.get('content-length') || 0)
+        }
+    } catch (headErr) {
+        launchLog('BUNDLE', '크기 확인 실패: ' + (headErr.message || headErr))
+    }
+
+    const marker = await readJsonIfExists(markerPath)
+    if (marker != null && remoteSize > 0 && marker.size === remoteSize) {
+        result.ok = true
+        result.skipped = true
+        launchLog('BUNDLE', '이미 최신 번들입니다 (건너뜀)')
+        return result
+    }
+
+    const zipPath = path.join(os.tmpdir(), 'barkan-custom-bundle.zip')
+
+    try {
+        launchLog('BUNDLE', '다운로드 시작' + (remoteSize > 0 ? ' (' + (remoteSize / 1048576).toFixed(1) + ' MB)' : ''))
+        await downloadToFile(CUSTOM_BUNDLE_URL, zipPath, null, null)
+
+        const AdmZip = require('adm-zip')
+        const zip = new AdmZip(zipPath)
+        const gameDirResolved = path.resolve(gameDir)
+
+        for (const entry of zip.getEntries()) {
+            if (entry.isDirectory) {
+                continue
+            }
+
+            const rel = entry.entryName.split('/').join(path.sep)
+            const target = path.join(gameDir, rel)
+
+            if (!path.resolve(target).startsWith(gameDirResolved + path.sep)) {
+                launchLog('BUNDLE', '경로 차단: ' + entry.entryName)
+                continue
+            }
+
+            const isMergeTarget = CUSTOM_BUNDLE_MERGE.some(p => {
+                try { return new RegExp(p).test(entry.entryName) } catch (e) { return false }
+            })
+
+            if (fs.existsSync(target)) {
+                if (isMergeTarget && /\.txt$/i.test(rel)) {
+                    try {
+                        const before = await fs.promises.readFile(target, 'utf8')
+                        const merged = mergeWaypointText(before, entry.getData().toString('utf8'))
+                        if (merged.added > 0) {
+                            const backup = target + '.before-bundle.bak'
+                            if (!fs.existsSync(backup)) {
+                                await fs.promises.copyFile(target, backup)
+                            }
+                            await fs.promises.writeFile(target, merged.text, 'utf8')
+                            result.merged++
+                        } else {
+                            result.kept++
+                        }
+                    } catch (mergeErr) {
+                        result.errors.push(rel + ': 병합 실패')
+                    }
+                    continue
+                }
+                result.kept++
+                continue
+            }
+
+            await fs.promises.mkdir(path.dirname(target), { recursive: true })
+            await fs.promises.writeFile(target, entry.getData())
+            result.written++
+        }
+
+        await fs.promises.rm(zipPath, { force: true }).catch(() => {})
+        await fs.promises.writeFile(markerPath, JSON.stringify({ size: remoteSize, at: Date.now() }, null, 4), 'utf8')
+
+        result.ok = result.errors.length === 0
+        launchLog('BUNDLE', '완료 — 신규 ' + result.written + ' / 보존 ' + result.kept + ' / 웨이포인트 병합 ' + result.merged)
+    } catch (bundleErr) {
+        result.errors.push(String(bundleErr && bundleErr.message ? bundleErr.message : bundleErr))
+        launchLog('BUNDLE', '실패: ' + (bundleErr && bundleErr.message ? bundleErr.message : bundleErr))
+        await fs.promises.rm(zipPath, { force: true }).catch(() => {})
+    }
+
+    return result
+}
+
+ipcMain.handle('customSyncBundle', async (event, gameDir) => {
+    try {
+        return await syncCustomBundle(gameDir)
+    } catch (err) {
+        launchLog('BUNDLE', '예외: ' + (err && err.message ? err.message : err))
+        return { ok: false, skipped: false, written: 0, kept: 0, merged: 0, errors: [String(err && err.message ? err.message : err)] }
+    }
+})
+
 ipcMain.handle('privateSyncProfile', async (event, gameDir) => {
     try {
         return await syncPrivateProfile(gameDir)

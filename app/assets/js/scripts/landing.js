@@ -689,6 +689,22 @@ async function dlAsync(login = true) {
                 logLaunch('PRIVATE', '오너가 아니므로 개인 프로필을 건너뜁니다')
             }
 
+            // 커스텀 번들: 모드 · 세부 설정 · 맵 캐시를 배포 저장소에서 받아 둡니다.
+            // 이미 있는 파일은 보존하고, 없는 파일만 채웁니다.
+            try {
+                setLaunchDetails('모드·설정 적용 중..')
+                logLaunch('BUNDLE', '커스텀 번들 동기화 시작')
+                const bundleResult = await require('electron').ipcRenderer.invoke('customSyncBundle', pb.gameDir)
+                if (bundleResult != null && bundleResult.skipped) {
+                    logLaunch('BUNDLE', '이미 최신 번들 (건너뜀)')
+                } else if (bundleResult != null && bundleResult.ok) {
+                    logLaunch('BUNDLE', '번들 적용 — 신규 ' + bundleResult.written + '개 / 보존 ' + bundleResult.kept + '개 / 병합 ' + bundleResult.merged + '개')
+                } else {
+                    logLaunch('BUNDLE', '번들 적용 실패 — 그대로 실행합니다: ' + (bundleResult != null && bundleResult.errors ? bundleResult.errors.join(' | ') : '알 수 없음'))
+                }
+            } catch (bundleErr) {
+                logLaunch('BUNDLE', '번들 예외 — 그대로 실행합니다: ' + (bundleErr && bundleErr.message ? bundleErr.message : bundleErr))
+            }
             logLaunch('LAUNCH', 'ProcessBuilder.build() 호출 — 게임 프로세스를 띄웁니다')
             proc = pb.build()
 
