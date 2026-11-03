@@ -51,7 +51,7 @@
                 "supported": "21.x",
                 "suggestedMajor": 21,
                 "ram": {
-                    "recommended": 4096,
+                    "recommended": 8192,
                     "minimum": 2048
                 }
             },

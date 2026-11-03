@@ -83,7 +83,7 @@ const DEFAULT_CONFIG = {
             language: 'ko_KR',
 
 
-            languageChosen: false,
+            languageChosen: true,
 
 
             pendingSettingsTab: null,

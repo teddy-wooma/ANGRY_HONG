@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-04",
+  "required": [
+    { "name": "Cloth Config API", "url": "https://modrinth.com/mod/cloth-config" },
+    { "name": "YetAnotherConfigLib", "url": "https://modrinth.com/mod/yacl" },
+    { "name": "Bobby", "url": "https://modrinth.com/mod/bobby" },
+    { "name": "Clear Water", "url": "https://modrinth.com/mod/clear-waterlavapowdersnow" },
+    { "name": "Fabric API", "url": "https://modrinth.com/mod/fabric-api" }
+  ],
+  "optional": [
+    { "name": "Entity Texture Features", "url": "https://modrinth.com/mod/entitytexturefeatures" },
+    { "name": "Entity Model Features", "url": "https://modrinth.com/mod/entity-model-features" },
+    { "name": "Mod Menu", "url": "https://modrinth.com/mod/modmenu" },
+    { "name": "FerriteCore", "url": "https://modrinth.com/mod/ferrite-core" },
+    { "name": "Entity Culling", "url": "https://modrinth.com/mod/entityculling" },
+    { "name": "Korean Chat Patch", "url": "https://modrinth.com/mod/korean-chat-patch" }
+  ]
+}
